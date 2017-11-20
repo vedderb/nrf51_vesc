@@ -1,0 +1,3 @@
+#!/bin/bash
+openocd -f openocd.cfg -c "init" -c "halt" -c "nrf51 mass_erase" -c "program hex/nrf51_vesc_ble.hex verify reset exit"
+

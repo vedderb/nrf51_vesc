@@ -74,8 +74,8 @@
 
 #define DEAD_BEEF                       0xDEADBEEF                                  /**< Value used as error code on stack dump, can be used to identify stack location on stack unwind. */
 
-#define UART_TX_BUF_SIZE                2048
-#define UART_RX_BUF_SIZE                2048
+#define UART_TX_BUF_SIZE                256
+#define UART_RX_BUF_SIZE                256
 
 #define PACKET_VESC						0
 #define PACKET_BLE						1
@@ -476,7 +476,9 @@ static void ble_send_buffer(unsigned char *data, unsigned int len) {
 
 static void uart_send_buffer(unsigned char *data, unsigned int len) {
 	for (int i = 0;i < len;i++) {
-		app_uart_put(data[i]);
+		while (app_uart_put(data[i]) == NRF_ERROR_NO_MEM) {
+			nrf_delay_us(100);
+		}
 	}
 }
 

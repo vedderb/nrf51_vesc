@@ -29,3 +29,6 @@ After that it can be connected to the VESC in the following way
 | VDD           | VCC (3.3V)    |
 | P0.09         | RX            |
 | P0.11         | TX            |
+
+Note that a 10 uF ceremaic capacitor between vcc and gnd close to the NRF51 module might be needed if the cables are long. Otherwise the connection can become slow and unstable.
+

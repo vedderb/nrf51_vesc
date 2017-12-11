@@ -37,11 +37,26 @@
 #include "nrf_delay.h"
 
 #include "pca10028.h"
+
 #include "nrf51_bitfields.h"
 #include "nrf_uart.h"
 #include "nrf51.h"
 
 #include "packet.h"
+
+// Use WT module (rx = p0.01 ; tx = p0.02 ; no 32k crystal)
+#ifndef MODULE_WT
+#define MODULE_WT						0
+#endif
+
+// https://devzone.nordicsemi.com/question/59389/solved-help-with-wgt51822-s2-module/
+#if MODULE_WT
+#undef NRF_CLOCK_LFCLKSRC
+#define NRF_CLOCK_LFCLKSRC      {.source        = NRF_CLOCK_LF_SRC_SYNTH,           \
+                                 .rc_ctiv       = 0,                                \
+                                 .rc_temp_ctiv  = 0,                                \
+                                 .xtal_accuracy = NRF_CLOCK_LF_XTAL_ACCURACY_20_PPM}
+#endif
 
 // Defines
 #define IS_SRVC_CHANGED_CHARACT_PRESENT 0                                           /**< Include the service_changed characteristic. If not enabled, the server's database cannot be changed for the lifetime of the device. */
@@ -398,6 +413,18 @@ void uart_event_handle(app_uart_evt_t * p_event) {
 
 static void uart_init(void) {
 	uint32_t err_code;
+
+#if MODULE_WT
+	const app_uart_comm_params_t comm_params = {
+			1,
+			2,
+			0,
+			0,
+			APP_UART_FLOW_CONTROL_DISABLED,
+			false,
+			UART_BAUDRATE_BAUDRATE_Baud115200
+	};
+#else
 	const app_uart_comm_params_t comm_params = {
 			11,
 			9,
@@ -407,6 +434,7 @@ static void uart_init(void) {
 			false,
 			UART_BAUDRATE_BAUDRATE_Baud115200
 	};
+#endif
 
 	APP_UART_FIFO_INIT(&comm_params,
 			UART_RX_BUF_SIZE,

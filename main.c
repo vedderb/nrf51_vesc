@@ -49,8 +49,12 @@
 #define MODULE_WT						0
 #endif
 
+#ifndef MODULE_TRAMPA
+#define MODULE_TRAMPA					0
+#endif
+
 // https://devzone.nordicsemi.com/question/59389/solved-help-with-wgt51822-s2-module/
-#if MODULE_WT
+#if MODULE_WT || MODULE_TRAMPA
 #undef NRF_CLOCK_LFCLKSRC
 #define NRF_CLOCK_LFCLKSRC      {.source        = NRF_CLOCK_LF_SRC_SYNTH,           \
                                  .rc_ctiv       = 0,                                \
@@ -424,6 +428,16 @@ static void uart_init(void) {
 			false,
 			UART_BAUDRATE_BAUDRATE_Baud115200
 	};
+#elif MODULE_TRAMPA
+	const app_uart_comm_params_t comm_params = {
+			2,
+			1,
+			0,
+			0,
+			APP_UART_FLOW_CONTROL_DISABLED,
+			false,
+			UART_BAUDRATE_BAUDRATE_Baud115200
+	};
 #else
 	const app_uart_comm_params_t comm_params = {
 			11,
@@ -556,6 +570,18 @@ static void timer_init(void) {
 
 int main(void) {
 	uint32_t err_code;
+
+	// The EYSGJNZXX and EYSGJNZWY modules use a 32 MHz crystals
+#if MODULE_TRAMPA
+	NRF_CLOCK->XTALFREQ = 0xFFFFFF00;
+
+	// Start the external high frequency crystal
+	NRF_CLOCK->EVENTS_HFCLKSTARTED = 0;
+	NRF_CLOCK->TASKS_HFCLKSTART = 1;
+
+	// Wait for the external oscillator to start up
+	while (NRF_CLOCK->EVENTS_HFCLKSTARTED == 0) {}
+#endif
 
 	APP_TIMER_INIT(APP_TIMER_PRESCALER, APP_TIMER_OP_QUEUE_SIZE, false);
 	uart_init();

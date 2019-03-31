@@ -5,11 +5,24 @@ OUTPUT_DIRECTORY := _build
 # So that eclipse can use the build output for indexing.
 VERBOSE=1
 
+# Use FW for 16k ram with limited functionality
+FW_16K ?= 0
+
+CFLAGS += $(build_args)
+
 SDK_ROOT := /home/benjamin/Dokument/nrf51822/sdk
 PROJ_DIR := .
 
+SD_PATH := $(SDK_ROOT)/components/softdevice/s130/hex/s130_nrf51_2.0.1_softdevice.hex
+TARGET_PATH := $(OUTPUT_DIRECTORY)/$(TARGETS).hex
+
+ifeq ($(FW_16K),0)
 $(OUTPUT_DIRECTORY)/nrf51822_xxac.out: \
   LINKER_SCRIPT  := ble_app_uart_gcc_nrf51.ld
+else
+$(OUTPUT_DIRECTORY)/nrf51822_xxac.out: \
+  LINKER_SCRIPT  := ble_app_uart_gcc_nrf51_16k.ld
+endif
 
 # Source files common to all targets
 SRC_FILES += \
@@ -47,8 +60,16 @@ SRC_FILES += \
   $(SDK_ROOT)/components/toolchain/system_nrf51.c \
   $(SDK_ROOT)/components/ble/ble_services/ble_nus/ble_nus.c \
   $(SDK_ROOT)/components/softdevice/common/softdevice_handler/softdevice_handler.c \
+  $(PROJ_DIR)/sdk_mod/nrf_esb.c \
   $(PROJ_DIR)/crc.c \
   $(PROJ_DIR)/packet.c \
+  $(PROJ_DIR)/buffer.c
+  
+ifeq ($(FW_16K),0)
+SRC_FILES += $(PROJ_DIR)/esb_timeslot.c
+else
+CFLAGS += -DFW_16K  
+endif
 
 # Include folders common to all targets
 INC_FOLDERS += \
@@ -153,6 +174,7 @@ INC_FOLDERS += \
   $(SDK_ROOT)/components/softdevice/common/softdevice_handler \
   $(SDK_ROOT)/components/ble/ble_services/ble_hrs \
   $(SDK_ROOT)/components/libraries/log/src \
+  $(PROJ_DIR)/sdk_mod \
   $(PROJ_DIR) \
 
 # Libraries common to all targets
@@ -161,6 +183,7 @@ LIB_FILES += \
 # C flags common to all targets
 CFLAGS += -DBOARD_PCA10028
 CFLAGS += -DSOFTDEVICE_PRESENT
+CFLAGS += -DESB_PRESENT
 CFLAGS += -DNRF51
 CFLAGS += -DS130
 CFLAGS += -DBLE_STACK_SUPPORT_REQD
@@ -175,6 +198,8 @@ CFLAGS += -mfloat-abi=soft
 CFLAGS += -ffunction-sections -fdata-sections -fno-strict-aliasing
 CFLAGS += -fno-builtin --short-enums 
 
+#CFLAGS += -DDEBUG
+
 # C++ flags common to all targets
 CXXFLAGS += \
 
@@ -188,6 +213,7 @@ ASMFLAGS += -DBLE_STACK_SUPPORT_REQD
 ASMFLAGS += -DSWI_DISABLE0
 ASMFLAGS += -DNRF51822
 ASMFLAGS += -DNRF_SD_BLE_API_VERSION=2
+ASMFLAGS += -DESB_PRESENT
 
 # Linker flags
 LDFLAGS += -mthumb -mabi=aapcs -L $(TEMPLATE_PATH) -T$(LINKER_SCRIPT)
@@ -198,15 +224,10 @@ LDFLAGS += -Wl,--gc-sections
 LDFLAGS += --specs=nano.specs -lc -lnosys
 
 
-.PHONY: $(TARGETS) default all clean help flash flash_softdevice upload upload_sd mass_erase
+.PHONY: $(TARGETS) default all clean flash flash_softdevice upload upload_sd mass_erase
 
 # Default target - first one defined
-default: nrf51822_xxac
-
-# Print all targets that can be built
-help:
-	@echo following targets are available:
-	@echo 	nrf51822_xxac
+default: $(TARGETS)
 
 TEMPLATE_PATH := $(SDK_ROOT)/components/toolchain/gcc
 
@@ -214,15 +235,20 @@ include $(TEMPLATE_PATH)/Makefile.common
 
 $(foreach target, $(TARGETS), $(call define_target, $(target)))
 
-upload: $(OUTPUT_DIRECTORY)/nrf51822_xxac.hex
-	openocd -f openocd.cfg -c "program $(OUTPUT_DIRECTORY)/nrf51822_xxac.hex verify reset exit"
+upload: $(TARGET_PATH)
+	openocd -f openocd.cfg -c "program $(TARGET_PATH) verify reset exit"
 
 upload_sd:
-	openocd -f openocd.cfg -c "program $(SDK_ROOT)/components/softdevice/s130/hex/s130_nrf51_2.0.1_softdevice.hex verify reset exit"
+	openocd -f openocd.cfg -c "program $(SD_PATH) verify reset exit"
 
 mass_erase:
 	openocd -f openocd.cfg -c "init" -c "halt" -c "nrf51 mass_erase" -c "exit"
 
-merge_hex: $(OUTPUT_DIRECTORY)/nrf51822_xxac.hex
+merge_hex: $(TARGET_PATH)
 	mkdir -p hex
-	srec_cat $(SDK_ROOT)/components/softdevice/s130/hex/s130_nrf51_2.0.1_softdevice.hex -intel $(OUTPUT_DIRECTORY)/nrf51822_xxac.hex -intel -o hex/nrf51_vesc_ble.hex -intel --line-length=44
+	srec_cat $(SD_PATH) -intel $(TARGET_PATH) -intel -o hex/merged.hex -intel --line-length=44
+	arm-none-eabi-objcopy -I ihex -O binary hex/merged.hex hex/merged.bin --gap-fill 0xFF
+
+upload_merged_bin:
+	openocd -f openocd.cfg -c "program hex/merged.bin verify reset exit"
+	

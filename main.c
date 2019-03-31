@@ -1,5 +1,5 @@
 /*
-	Copyright 2017 Benjamin Vedder	benjamin@vedder.se
+	Copyright 2017 - 2019 Benjamin Vedder	benjamin@vedder.se
 
 	This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -32,8 +32,6 @@
 #include "ble_nus.h"
 #include "app_uart.h"
 #include "app_util_platform.h"
-#include "bsp.h"
-#include "bsp_btn_ble.h"
 #include "nrf_delay.h"
 
 #include "pca10028.h"
@@ -42,25 +40,80 @@
 #include "nrf_uart.h"
 #include "nrf51.h"
 
-#include "packet.h"
+#include "nrf_esb.h"
+#include "nrf_error.h"
+#include "nrf_esb_error_codes.h"
 
-// Use WT module (rx = p0.01 ; tx = p0.02 ; no 32k crystal)
-#ifndef MODULE_WT
-#define MODULE_WT						0
+#include "packet.h"
+#include "crc.h"
+#include "buffer.h"
+#include "datatypes.h"
+
+#ifndef FW_16K
+#include "esb_timeslot.h"
 #endif
+
+#if 0
+#ifdef APP_ERROR_CHECK
+#undef APP_ERROR_CHECK
+#endif
+void my_printf(const char* format, ...);
+#define APP_ERROR_CHECK(ERR_CODE)                       \
+do                                                      \
+{                                                       \
+	if (ERR_CODE != NRF_SUCCESS)                  		\
+		{                                               \
+			my_printf("Error %d: %s L %d\r\n", ERR_CODE, __FILE__, __LINE__); \
+        }                                               \
+} while (0)
+#endif
+
+#define PRINT_EN						0
 
 #ifndef MODULE_TRAMPA
 #define MODULE_TRAMPA					0
 #endif
 
+#ifndef MODULE_BUILTIN
+#define MODULE_BUILTIN					0
+#endif
+
+#ifndef MODULE_WT
+#define MODULE_WT						0
+#endif
+
+#if MODULE_TRAMPA
+#define UART_RX							2
+#define UART_TX							1
+#define UART_TX_DISABLED				25
+#define EN_DEFAULT						1
+#define LED_PIN							3
+#elif MODULE_BUILTIN
+#define UART_RX							1
+#define UART_TX							2
+#define UART_TX_DISABLED				25
+#define EN_DEFAULT						1
+#define LED_PIN							3
+#elif MODULE_WT
+#define UART_RX							1
+#define UART_TX							2
+#define UART_TX_DISABLED				25
+#define EN_DEFAULT						1
+#define LED_PIN							3
+#else
+#define UART_RX							11
+#define UART_TX							9
+#define UART_TX_DISABLED				25
+#define EN_DEFAULT						1
+#define LED_PIN							3
+#endif
+
 // https://devzone.nordicsemi.com/question/59389/solved-help-with-wgt51822-s2-module/
-#if MODULE_WT || MODULE_TRAMPA
 #undef NRF_CLOCK_LFCLKSRC
 #define NRF_CLOCK_LFCLKSRC      {.source        = NRF_CLOCK_LF_SRC_SYNTH,           \
                                  .rc_ctiv       = 0,                                \
                                  .rc_temp_ctiv  = 0,                                \
                                  .xtal_accuracy = NRF_CLOCK_LF_XTAL_ACCURACY_20_PPM}
-#endif
 
 // Defines
 #define IS_SRVC_CHANGED_CHARACT_PRESENT 0                                           /**< Include the service_changed characteristic. If not enabled, the server's database cannot be changed for the lifetime of the device. */
@@ -74,7 +127,12 @@
 #define CENTRAL_LINK_COUNT              0                                           /**< Number of central links used by the application. When changing this number remember to adjust the RAM settings*/
 #define PERIPHERAL_LINK_COUNT           1                                           /**< Number of peripheral links used by the application. When changing this number remember to adjust the RAM settings*/
 
-#define DEVICE_NAME                     "VESC BLE UART"                             /**< Name of device. Will be included in the advertising data. */
+#if MODULE_BUILTIN
+#define DEVICE_NAME                     "VESC BUILTIN BLE"
+#else
+#define DEVICE_NAME                     "VESC BLE UART"
+#endif
+
 #define NUS_SERVICE_UUID_TYPE           BLE_UUID_TYPE_VENDOR_BEGIN                  /**< UUID type for the Nordic UART Service (vendor specific). */
 
 #define APP_ADV_INTERVAL                64                                          /**< The advertising interval (in units of 0.625 ms. This value corresponds to 40 ms). */
@@ -91,21 +149,41 @@
 #define NEXT_CONN_PARAMS_UPDATE_DELAY   APP_TIMER_TICKS(30000, APP_TIMER_PRESCALER) /**< Time between each call to sd_ble_gap_conn_param_update after the first call (30 seconds). */
 #define MAX_CONN_PARAMS_UPDATE_COUNT    3                                           /**< Number of attempts before giving up the connection parameter negotiation. */
 
-#define DEAD_BEEF                       0xDEADBEEF                                  /**< Value used as error code on stack dump, can be used to identify stack location on stack unwind. */
-
-#define UART_TX_BUF_SIZE                256
-#define UART_RX_BUF_SIZE                256
+#ifndef FW_16K
+#define UART_TX_BUF_SIZE                1024
+#define UART_RX_BUF_SIZE                8192
+#else
+#define UART_TX_BUF_SIZE                512
+#define UART_RX_BUF_SIZE                1024
+#endif
 
 #define PACKET_VESC						0
 #define PACKET_BLE						1
-#define PRINT_EN						0
+
+APP_TIMER_DEF(m_packet_timer);
+#ifndef FW_16K
+APP_TIMER_DEF(m_nrf_timer);
+#endif
 
 // Private variables
-static ble_nus_t                        m_nus;                                      /**< Structure to identify the Nordic UART Service. */
-static uint16_t                         m_conn_handle = BLE_CONN_HANDLE_INVALID;    /**< Handle of the current connection. */
-static ble_uuid_t                       m_adv_uuids[] = {{BLE_UUID_NUS_SERVICE, NUS_SERVICE_UUID_TYPE}};  /**< Universally unique service identifier. */
+static ble_nus_t                        m_nus;
+static uint16_t                         m_conn_handle = BLE_CONN_HANDLE_INVALID;
+static ble_uuid_t                       m_adv_uuids[] = {{BLE_UUID_NUS_SERVICE, NUS_SERVICE_UUID_TYPE}};
+static bool								m_is_enabled = EN_DEFAULT;
+static bool								m_uart_error = false;
+static int								m_other_comm_disable_time = 0;
 
-static void my_printf(const char* format, ...) {
+static app_uart_comm_params_t m_uart_comm_params = {
+		UART_RX,
+		EN_DEFAULT ? UART_TX : UART_TX_DISABLED,
+		0,
+		0,
+		APP_UART_FLOW_CONTROL_DISABLED,
+		false,
+		UART_BAUDRATE_BAUDRATE_Baud115200
+};
+
+void my_printf(const char* format, ...) {
 #if PRINT_EN
 	va_list arg;
 	va_start (arg, format);
@@ -128,9 +206,8 @@ static void my_printf(const char* format, ...) {
  * APP_ERROR_HANDLER resets the CPU, which results in an immediate disconnect.
  * APP_ERROR_CHECK calls APP_ERROR_HANDLER on errors.
  */
-
 void assert_nrf_callback(uint16_t line_num, const uint8_t * p_file_name) {
-	app_error_handler(DEAD_BEEF, line_num, p_file_name);
+	app_error_handler(0xDEADBEEF, line_num, p_file_name);
 }
 
 static void gap_params_init(void) {
@@ -208,26 +285,10 @@ static void conn_params_init(void) {
 	APP_ERROR_CHECK(err_code);
 }
 
-static void sleep_mode_enter(void) {
-	uint32_t err_code = bsp_indication_set(BSP_INDICATE_IDLE);
-	APP_ERROR_CHECK(err_code);
-
-	// Prepare wakeup buttons.
-	err_code = bsp_btn_ble_sleep_mode_prepare();
-	APP_ERROR_CHECK(err_code);
-
-	// Go to system-off mode (this function will not return; wakeup will cause a reset).
-	err_code = sd_power_system_off();
-	APP_ERROR_CHECK(err_code);
-}
-
 static void on_adv_evt(ble_adv_evt_t ble_adv_evt) {
-	uint32_t err_code;
-
 	switch (ble_adv_evt) {
 	case BLE_ADV_EVT_FAST:
-		err_code = bsp_indication_set(BSP_INDICATE_ADVERTISING);
-		APP_ERROR_CHECK(err_code);
+
 		break;
 	case BLE_ADV_EVT_IDLE: {
 //		sleep_mode_enter();
@@ -245,17 +306,19 @@ static void on_ble_evt(ble_evt_t * p_ble_evt) {
 
 	switch (p_ble_evt->header.evt_id) {
 	case BLE_GAP_EVT_CONNECTED:
-		err_code = bsp_indication_set(BSP_INDICATE_CONNECTED);
-		APP_ERROR_CHECK(err_code);
 		m_conn_handle = p_ble_evt->evt.gap_evt.conn_handle;
 		my_printf("Connected\r\n");
+		nrf_gpio_pin_set(LED_PIN);
+//		nrf_gpio_cfg_output(UART_TX);
+//		nrf_gpio_cfg_input(UART_RX, NRF_GPIO_PIN_NOPULL);
 		break;
 
 	case BLE_GAP_EVT_DISCONNECTED:
-		err_code = bsp_indication_set(BSP_INDICATE_IDLE);
-		APP_ERROR_CHECK(err_code);
 		m_conn_handle = BLE_CONN_HANDLE_INVALID;
 		my_printf("Disconnected\r\n");
+		nrf_gpio_pin_clear(LED_PIN);
+//		nrf_gpio_cfg_default(UART_RX);
+//		nrf_gpio_cfg_default(UART_TX);
 		break;
 
 	case BLE_GAP_EVT_SEC_PARAMS_REQUEST:
@@ -330,7 +393,6 @@ static void ble_evt_dispatch(ble_evt_t * p_ble_evt) {
 	ble_nus_on_ble_evt(&m_nus, p_ble_evt);
 	on_ble_evt(p_ble_evt);
 	ble_advertising_on_ble_evt(p_ble_evt);
-	bsp_btn_ble_on_ble_evt(p_ble_evt);
 }
 
 static void ble_stack_init(void) {
@@ -362,36 +424,6 @@ static void ble_stack_init(void) {
 	APP_ERROR_CHECK(err_code);
 }
 
-void bsp_event_handler(bsp_event_t event) {
-	uint32_t err_code;
-	switch (event) {
-	case BSP_EVENT_SLEEP:
-		sleep_mode_enter();
-		break;
-
-	case BSP_EVENT_DISCONNECT:
-		err_code = sd_ble_gap_disconnect(m_conn_handle, BLE_HCI_REMOTE_USER_TERMINATED_CONNECTION);
-		if (err_code != NRF_ERROR_INVALID_STATE) {
-			APP_ERROR_CHECK(err_code);
-		}
-		break;
-
-	case BSP_EVENT_WHITELIST_OFF:
-		if (m_conn_handle == BLE_CONN_HANDLE_INVALID) {
-			err_code = ble_advertising_restart_without_whitelist();
-			if (err_code != NRF_ERROR_INVALID_STATE) {
-				APP_ERROR_CHECK(err_code);
-			}
-		}
-		break;
-
-	default:
-		break;
-	}
-}
-
-static bool uart_error = false;
-
 void uart_event_handle(app_uart_evt_t * p_event) {
 	switch (p_event->evt_type) {
 	case APP_UART_DATA_READY: {
@@ -400,7 +432,7 @@ void uart_event_handle(app_uart_evt_t * p_event) {
 
 	case APP_UART_COMMUNICATION_ERROR: {
 //		APP_ERROR_HANDLER(p_event->data.error_communication);
-		uart_error = true;
+		m_uart_error = true;
 	} break;
 
 	case APP_UART_FIFO_ERROR:
@@ -418,39 +450,7 @@ void uart_event_handle(app_uart_evt_t * p_event) {
 static void uart_init(void) {
 	uint32_t err_code;
 
-#if MODULE_WT
-	const app_uart_comm_params_t comm_params = {
-			1,
-			2,
-			0,
-			0,
-			APP_UART_FLOW_CONTROL_DISABLED,
-			false,
-			UART_BAUDRATE_BAUDRATE_Baud115200
-	};
-#elif MODULE_TRAMPA
-	const app_uart_comm_params_t comm_params = {
-			2,
-			1,
-			0,
-			0,
-			APP_UART_FLOW_CONTROL_DISABLED,
-			false,
-			UART_BAUDRATE_BAUDRATE_Baud115200
-	};
-#else
-	const app_uart_comm_params_t comm_params = {
-			11,
-			9,
-			0,
-			0,
-			APP_UART_FLOW_CONTROL_DISABLED,
-			false,
-			UART_BAUDRATE_BAUDRATE_Baud115200
-	};
-#endif
-
-	APP_UART_FIFO_INIT(&comm_params,
+	APP_UART_FIFO_INIT(&m_uart_comm_params,
 			UART_RX_BUF_SIZE,
 			UART_TX_BUF_SIZE,
 			uart_event_handle,
@@ -490,6 +490,22 @@ static void power_manage(void) {
 	APP_ERROR_CHECK(err_code);
 }
 
+static void set_enabled(bool en) {
+	m_is_enabled = en;
+
+	if (m_is_enabled) {
+		app_uart_close();
+		m_uart_comm_params.tx_pin_no = UART_TX;
+		uart_init();
+		nrf_gpio_cfg_default(UART_TX_DISABLED);
+	} else {
+		app_uart_close();
+		m_uart_comm_params.tx_pin_no = UART_TX_DISABLED;
+		uart_init();
+		nrf_gpio_cfg_default(UART_TX);
+	}
+}
+
 static void ble_send_buffer(unsigned char *data, unsigned int len) {
 	if (m_conn_handle != BLE_CONN_HANDLE_INVALID) {
 		uint32_t err_code = NRF_SUCCESS;
@@ -518,61 +534,98 @@ static void ble_send_buffer(unsigned char *data, unsigned int len) {
 
 static void uart_send_buffer(unsigned char *data, unsigned int len) {
 	for (int i = 0;i < len;i++) {
-		while (app_uart_put(data[i]) == NRF_ERROR_NO_MEM) {
-			nrf_delay_us(100);
+		app_uart_put(data[i]);
+//		while (app_uart_put(data[i]) == NRF_ERROR_NO_MEM) {
+//			nrf_delay_us(100);
+//		}
+	}
+}
+
+#ifndef FW_16K
+void rfhelp_send_data_crc(uint8_t *data, unsigned int len) {
+	uint8_t buffer[len + 2];
+	unsigned short crc = crc16((unsigned char*)data, len);
+	memcpy(buffer, data, len);
+	buffer[len] = (char)(crc >> 8);
+	buffer[len + 1] = (char)(crc & 0xFF);
+	esb_timeslot_set_next_packet(buffer, len + 2);
+}
+#endif
+
+static void process_packet_ble(unsigned char *data, unsigned int len) {
+	if (data[0] == COMM_ERASE_NEW_APP ||
+			data[0] == COMM_WRITE_NEW_APP_DATA ||
+			data[0] == COMM_ERASE_NEW_APP_ALL_CAN ||
+			data[0] == COMM_WRITE_NEW_APP_DATA_ALL_CAN) {
+		m_other_comm_disable_time = 5000;
+	}
+
+	CRITICAL_REGION_ENTER();
+	packet_send_packet(data, len, PACKET_VESC);
+	CRITICAL_REGION_EXIT();
+}
+
+static void process_packet_vesc(unsigned char *data, unsigned int len) {
+	if (data[0] == COMM_EXT_NRF_ESB_SET_CH_ADDR) {
+#ifndef FW_16K
+		esb_timeslot_set_ch_addr(data[1], data[2], data[3], data[4]);
+#endif
+	} else if (data[0] == COMM_EXT_NRF_ESB_SEND_DATA) {
+#ifndef FW_16K
+		rfhelp_send_data_crc(data + 1, len - 1);
+#endif
+	} else if (data[0] == COMM_EXT_NRF_SET_ENABLED) {
+		set_enabled(data[1]);
+	} else {
+		if (m_is_enabled) {
+			packet_send_packet(data, len, PACKET_BLE);
 		}
 	}
 }
 
-static void process_packet_ble(unsigned char *data, unsigned int len) {
-	packet_send_packet(data, len, PACKET_VESC);
-}
-
-static void process_packet_vesc(unsigned char *data, unsigned int len) {
-	packet_send_packet(data, len, PACKET_BLE);
-}
-
-void TIMER2_IRQHandler(void) {
-	if ((NRF_TIMER2->EVENTS_COMPARE[0] != 0)
-			&& ((NRF_TIMER2->INTENSET & TIMER_INTENSET_COMPARE0_Msk) != 0)) {
-		NRF_TIMER2->EVENTS_COMPARE[0] = 0;
-		packet_timerfunc();
+#ifndef FW_16K
+static void esb_timeslot_data_handler(void *p_data, uint16_t length) {
+	if (m_other_comm_disable_time == 0) {
+		uint8_t buffer[length + 1];
+		buffer[0] = COMM_EXT_NRF_ESB_RX_DATA;
+		memcpy(buffer + 1, p_data, length);
+		CRITICAL_REGION_ENTER();
+		packet_send_packet(buffer, length + 1, PACKET_VESC);
+		CRITICAL_REGION_EXIT();
 	}
 }
+#endif
 
-static void timer_init(void) {
-	NRF_TIMER2->MODE = TIMER_MODE_MODE_Timer;
-	NRF_TIMER2->TASKS_CLEAR = 1; // clear the task first to be usable for later
-	NRF_TIMER2->PRESCALER = 4;
-	NRF_TIMER2->BITMODE = TIMER_BITMODE_BITMODE_16Bit;
-	NRF_TIMER2->CC[0] = 2000;
+static void packet_timer_handler(void *p_context) {
+	(void)p_context;
+	packet_timerfunc();
 
-	// Clear the timer when COMPARE0 event is triggered
-	NRF_TIMER2->SHORTS = TIMER_SHORTS_COMPARE0_CLEAR_Enabled << TIMER_SHORTS_COMPARE0_CLEAR_Pos;
-
-	// Interrupt
-	NRF_TIMER2->INTENSET = (TIMER_INTENSET_COMPARE0_Enabled << TIMER_INTENSET_COMPARE0_Pos);
-	NVIC_EnableIRQ(TIMER2_IRQn);
-
-	// Start
-	NRF_TIMER2->TASKS_START = 1;
+	CRITICAL_REGION_ENTER();
+	if (m_other_comm_disable_time > 0) {
+		m_other_comm_disable_time--;
+	}
+	CRITICAL_REGION_EXIT();
 }
 
-//static void update_connection(void) {
-//	ble_gap_conn_params_t param;
-//	param.conn_sup_timeout = 10000;
-//	param.min_conn_interval = 6;
-//	param.max_conn_interval = 10;
-//	param.slave_latency = 0;
-//
-//	sd_ble_gap_conn_param_update(m_conn_handle, &param);
-//}
+#ifndef FW_16K
+static void nrf_timer_handler(void *p_context) {
+	(void)p_context;
+
+	if (m_other_comm_disable_time == 0) {
+		uint8_t buffer[1];
+		buffer[0] = COMM_EXT_NRF_PRESENT;
+		CRITICAL_REGION_ENTER();
+		packet_send_packet(buffer, 1, PACKET_VESC);
+		CRITICAL_REGION_EXIT();
+	}
+}
+#endif
 
 int main(void) {
 	uint32_t err_code;
 
 	// The EYSGJNZXX and EYSGJNZWY modules use a 32 MHz crystals
-#if MODULE_TRAMPA
+#if MODULE_TRAMPA || MODULE_BUILTIN
 	NRF_CLOCK->XTALFREQ = 0xFFFFFF00;
 
 	// Start the external high frequency crystal
@@ -581,6 +634,9 @@ int main(void) {
 
 	// Wait for the external oscillator to start up
 	while (NRF_CLOCK->EVENTS_HFCLKSTARTED == 0) {}
+
+	nrf_gpio_cfg_output(LED_PIN);
+	nrf_gpio_pin_clear(LED_PIN);
 #endif
 
 	APP_TIMER_INIT(APP_TIMER_PRESCALER, APP_TIMER_OP_QUEUE_SIZE, false);
@@ -595,17 +651,26 @@ int main(void) {
 	advertising_init();
 	conn_params_init();
 
-	timer_init();
+	app_timer_create(&m_packet_timer, APP_TIMER_MODE_REPEATED, packet_timer_handler);
+	app_timer_start(m_packet_timer, APP_TIMER_TICKS(1, APP_TIMER_PRESCALER), NULL);
+
+#ifndef FW_16K
+	app_timer_create(&m_nrf_timer, APP_TIMER_MODE_REPEATED, nrf_timer_handler);
+	app_timer_start(m_nrf_timer, APP_TIMER_TICKS(1000, APP_TIMER_PRESCALER), NULL);
+
+	esb_timeslot_init(esb_timeslot_data_handler);
+//	esb_timeslot_set_ch_addr(67, 0xC6, 0xC5, 0x0);
+	esb_timeslot_sd_start();
+#endif
 
 	err_code = ble_advertising_start(BLE_ADV_MODE_FAST);
 	APP_ERROR_CHECK(err_code);
 
 	my_printf("UART TEST\r\n");
 
-	// Enter main loop.
 	for (;;) {
 		// Restore uart on errors
-		if (uart_error) {
+		if (m_uart_error) {
 			app_uart_close();
 
 			uint32_t error = NRF_UART0->ERRORSRC;
@@ -625,7 +690,7 @@ int main(void) {
 			nrf_uart_event_clear(NRF_UART0, NRF_UART_EVENT_TXDRDY);
 			nrf_uart_event_clear(NRF_UART0, NRF_UART_EVENT_ERROR);
 
-			uart_error = false;
+			m_uart_error = false;
 		}
 
 		// Poll UART

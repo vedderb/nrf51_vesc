@@ -153,8 +153,8 @@ do                                                      \
 #define UART_TX_BUF_SIZE                1024
 #define UART_RX_BUF_SIZE                8192
 #else
-#define UART_TX_BUF_SIZE                512
-#define UART_RX_BUF_SIZE                1024
+#define UART_TX_BUF_SIZE                256
+#define UART_RX_BUF_SIZE                512
 #endif
 
 #define PACKET_VESC						0
@@ -622,8 +622,6 @@ static void nrf_timer_handler(void *p_context) {
 #endif
 
 int main(void) {
-	uint32_t err_code;
-
 	// The EYSGJNZXX and EYSGJNZWY modules use a 32 MHz crystals
 #if MODULE_TRAMPA || MODULE_BUILTIN
 	NRF_CLOCK->XTALFREQ = 0xFFFFFF00;
@@ -663,10 +661,7 @@ int main(void) {
 	esb_timeslot_sd_start();
 #endif
 
-	err_code = ble_advertising_start(BLE_ADV_MODE_FAST);
-	APP_ERROR_CHECK(err_code);
-
-	my_printf("UART TEST\r\n");
+	ble_advertising_start(BLE_ADV_MODE_FAST);
 
 	for (;;) {
 		// Restore uart on errors

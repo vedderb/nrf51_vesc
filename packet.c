@@ -28,6 +28,7 @@
 
 // Defines
 #define BUFFER_LEN				(PACKET_MAX_PL_LEN + 8)
+#define PACKET_NO_TX_BUFFER
 
 // Private types
 typedef struct {
@@ -38,7 +39,9 @@ typedef struct {
 	unsigned int rx_write_ptr;
 	int bytes_left;
 	unsigned char rx_buffer[BUFFER_LEN];
+#ifndef PACKET_NO_TX_BUFFER
 	unsigned char tx_buffer[BUFFER_LEN];
+#endif
 } PACKET_STATE_t;
 
 // Private variables
@@ -68,25 +71,41 @@ void packet_send_packet(unsigned char *data, unsigned int len, int handler_num) 
 
 	int b_ind = 0;
 	PACKET_STATE_t *handler = &m_handler_states[handler_num];
+	unsigned short crc = crc16(data, len);
+
+#ifdef PACKET_NO_TX_BUFFER
+	unsigned char header[4];
+#else
+	unsigned char header = handler->tx_buffer;
+#endif
 
 	if (len <= 255) {
-		handler->tx_buffer[b_ind++] = 2;
-		handler->tx_buffer[b_ind++] = len;
+		header[b_ind++] = 2;
+		header[b_ind++] = len;
 	} else if (len <= 65535) {
-		handler->tx_buffer[b_ind++] = 3;
-		handler->tx_buffer[b_ind++] = len >> 8;
-		handler->tx_buffer[b_ind++] = len & 0xFF;
+		header[b_ind++] = 3;
+		header[b_ind++] = len >> 8;
+		header[b_ind++] = len & 0xFF;
 	} else {
-		handler->tx_buffer[b_ind++] = 4;
-		handler->tx_buffer[b_ind++] = len >> 16;
-		handler->tx_buffer[b_ind++] = (len >> 8) & 0x0F;
-		handler->tx_buffer[b_ind++] = len & 0xFF;
+		header[b_ind++] = 4;
+		header[b_ind++] = len >> 16;
+		header[b_ind++] = (len >> 8) & 0x0F;
+		header[b_ind++] = len & 0xFF;
 	}
 
+#ifdef PACKET_NO_TX_BUFFER
+	if (handler->send_func) {
+		handler->send_func(header, b_ind);
+		handler->send_func(data, len);
+		header[0] = (uint8_t)(crc >> 8);
+		header[1] = (uint8_t)(crc & 0xFF);
+		header[2] = 3;
+		handler->send_func(header, 3);
+	}
+#else
 	memcpy(handler->tx_buffer + b_ind, data, len);
 	b_ind += len;
 
-	unsigned short crc = crc16(data, len);
 	handler->tx_buffer[b_ind++] = (uint8_t)(crc >> 8);
 	handler->tx_buffer[b_ind++] = (uint8_t)(crc & 0xFF);
 	handler->tx_buffer[b_ind++] = 3;
@@ -94,6 +113,7 @@ void packet_send_packet(unsigned char *data, unsigned int len, int handler_num) 
 	if (handler->send_func) {
 		handler->send_func(handler->tx_buffer, b_ind);
 	}
+#endif
 }
 
 /**

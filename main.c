@@ -534,10 +534,13 @@ static void ble_send_buffer(unsigned char *data, unsigned int len) {
 
 static void uart_send_buffer(unsigned char *data, unsigned int len) {
 	for (int i = 0;i < len;i++) {
+#ifndef FW_16K
 		app_uart_put(data[i]);
-//		while (app_uart_put(data[i]) == NRF_ERROR_NO_MEM) {
-//			nrf_delay_us(100);
-//		}
+#else
+		while (app_uart_put(data[i]) == NRF_ERROR_NO_MEM) {
+			nrf_delay_us(100);
+		}
+#endif
 	}
 }
 
@@ -553,6 +556,7 @@ void rfhelp_send_data_crc(uint8_t *data, unsigned int len) {
 #endif
 
 static void process_packet_ble(unsigned char *data, unsigned int len) {
+#ifndef FW_16K
 	if (data[0] == COMM_ERASE_NEW_APP ||
 			data[0] == COMM_WRITE_NEW_APP_DATA ||
 			data[0] == COMM_ERASE_NEW_APP_ALL_CAN ||
@@ -563,6 +567,9 @@ static void process_packet_ble(unsigned char *data, unsigned int len) {
 	CRITICAL_REGION_ENTER();
 	packet_send_packet(data, len, PACKET_VESC);
 	CRITICAL_REGION_EXIT();
+#else
+	packet_send_packet(data, len, PACKET_VESC);
+#endif
 }
 
 static void process_packet_vesc(unsigned char *data, unsigned int len) {

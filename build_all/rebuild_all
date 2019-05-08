@@ -1,41 +1,41 @@
 #!/bin/bash
 set -e
 
-FWPATH="../"
 DIR=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
+FWPATH=$DIR/../
 
 cd $FWPATH
-touch main.c
+make clean
 make -j8 FW_16K=1 build_args='-DMODULE_TRAMPA=0 -DMODULE_BUILTIN=0 -DMODULE_WT=0'
-make merge_hex
+make FW_16K=1 merge_hex
 cd $DIR
 cp $FWPATH/hex/merged.bin nrf51_vesc_ble_16k_16m_rx11_tx9_led3.bin
 
 cd $FWPATH
-touch main.c
+make clean
 make -j8 FW_16K=1 build_args='-DMODULE_TRAMPA=0 -DMODULE_BUILTIN=0 -DMODULE_WT=1'
-make merge_hex
+make FW_16K=1 merge_hex
 cd $DIR
 cp $FWPATH/hex/merged.bin nrf51_vesc_ble_16k_16m_rx1_tx2_led3.bin
 
 cd $FWPATH
-touch main.c
+make clean
 make -j8 FW_16K=0 build_args='-DMODULE_TRAMPA=0 -DMODULE_BUILTIN=0 -DMODULE_WT=0'
-make merge_hex
+make FW_16K=0 merge_hex
 cd $DIR
 cp $FWPATH/hex/merged.bin nrf51_vesc_ble_32k_16m_rx11_tx9_led3.bin
 
 cd $FWPATH
-touch main.c
+make clean
 make -j8 FW_16K=0 build_args='-DMODULE_TRAMPA=1 -DMODULE_BUILTIN=0 -DMODULE_WT=0'
-make merge_hex
+make FW_16K=0 merge_hex
 cd $DIR
 cp $FWPATH/hex/merged.bin nrf51_vesc_ble_32k_32m_rx2_tx1_led3.bin
 
 cd $FWPATH
-touch main.c
+make clean
 make -j8 FW_16K=0 build_args='-DMODULE_TRAMPA=0 -DMODULE_BUILTIN=1 -DMODULE_WT=0'
-make merge_hex
+make FW_16K=0 merge_hex
 cd $DIR
 cp $FWPATH/hex/merged.bin nrf51_vesc_ble_32k_32m_rx1_tx2_led3.bin
 

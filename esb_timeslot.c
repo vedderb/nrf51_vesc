@@ -40,10 +40,10 @@ do                                                      \
 #define UESB_RX_HANDLE_IRQPriority  3                       /**< Interrupt priority of @ref UESB_RX_HANDLE_IRQn. */
 
 #define MAX_TX_ATTEMPTS             10                      /**< Maximum attempt before discarding the packet (the number of trial = MAX_TX_ATTEMPTS x retransmit_count, if timeslot is large enough) */
-#define TS_LEN_US                   (5000UL)                /**< Length of timeslot to be requested. */
-#define TX_LEN_EXTENSION_US         (5000UL)                /**< Length of timeslot to be extended. */
-#define TS_SAFETY_MARGIN_US         (700UL)                 /**< The timeslot activity should be finished with this much to spare. */
-#define TS_EXTEND_MARGIN_US         (2000UL)                /**< Margin reserved for extension processing. */
+#define TS_LEN_US                   (1000UL)                /**< Length of timeslot to be requested. */
+#define TX_LEN_EXTENSION_US         (1000UL)                /**< Length of timeslot to be extended. */
+#define TS_SAFETY_MARGIN_US         (500UL)                 /**< The timeslot activity should be finished with this much to spare. */
+#define TS_EXTEND_MARGIN_US         (1000UL)                /**< Margin reserved for extension processing. */
 
 static volatile enum {
 	STATE_IDLE, /**< Default state. */

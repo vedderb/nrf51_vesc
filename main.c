@@ -133,6 +133,9 @@ do                                                      \
 #define DEVICE_NAME                     "VESC BLE UART"
 #endif
 
+#define MAX_DEVICE_NAME_LENGTH 30
+#define DEVICE_NAME_HAS_UUID
+
 #define NUS_SERVICE_UUID_TYPE           BLE_UUID_TYPE_VENDOR_BEGIN                  /**< UUID type for the Nordic UART Service (vendor specific). */
 
 #define APP_ADV_INTERVAL                64                                          /**< The advertising interval (in units of 0.625 ms. This value corresponds to 40 ms). */
@@ -216,10 +219,33 @@ static void gap_params_init(void) {
 	ble_gap_conn_sec_mode_t sec_mode;
 
 	BLE_GAP_CONN_SEC_MODE_SET_OPEN(&sec_mode);
-
-	err_code = sd_ble_gap_device_name_set(&sec_mode,
-			(const uint8_t *) DEVICE_NAME,
-			strlen(DEVICE_NAME));
+	#ifdef DEVICE_NAME_HAS_UUID
+    	// Generate unique device name
+    	char unique_id[6];  // 5 characters (2 bytes + colon) + null terminator
+    	char device_name[MAX_DEVICE_NAME_LENGTH];
+    
+    	// Get last 2 bytes of MAC address
+    	uint32_t mac_low = NRF_FICR->DEVICEADDR[0];
+    	uint16_t unique_part = (uint16_t)(mac_low & 0xFFFF);  // Last 2 bytes
+    
+    	// Convert to string (5 characters: 2 hex + colon + 2 hex)
+    	snprintf(unique_id, sizeof(unique_id), "%02X:%02X", (unique_part >> 8) & 0xFF, unique_part & 0xFF);
+    
+    	// Combine base name and unique ID, ensuring total length is at most 29 visible characters
+    	int base_len = strlen(DEVICE_NAME);
+    	int total_len = base_len + 1 + 5;  // base name + space + 5 char ID (XX:XX)
+    	if (total_len > 29) {
+        	base_len = 23;  // Truncate base name if necessary to allow for space and 5-char ID
+    	}
+    	snprintf(device_name, sizeof(device_name), "%.*s %s", base_len, DEVICE_NAME, unique_id);
+		err_code = sd_ble_gap_device_name_set(&sec_mode,
+				(const uint8_t *) device_name,
+				strlen(device_name));
+	#else
+		err_code = sd_ble_gap_device_name_set(&sec_mode,
+				(const uint8_t *) DEVICE_NAME,
+				strlen(DEVICE_NAME));
+	#endif
 	APP_ERROR_CHECK(err_code);
 
 	memset(&gap_conn_params, 0, sizeof(gap_conn_params));

@@ -8,9 +8,18 @@ This should work with any NRF51822 module, such as this one that I'm using:
 https://www.ebay.com/itm/Core51822-BLE4-0-Bluetooth-2-4G-Wireless-Module-nRF51822-Onboard-WS82013/281988119330?ssPageName=STRK%3AMEBIDX%3AIT&_trksid=p2057872.m2749.l2649
 
 The code can be build with the NRF51822 sdk by changing the path in Makefile, but for convenience a prebuild hex file is also included. It can be uploaded with openocd by running the following script:
+To install Openocd on Linux :
+```bash
+sudo apt-get install openocd
+```
+On windows, use WSL2 or MSYS2 and check the openocd webpage to know more https://openocd.org/pages/getting-openocd.html
 
 ```bash
-./upload_merged
+sudo ./upload_merged
+```
+OR for WT (try this if the one on up doesn't work :
+```bash
+sudo ./upload_merged_wt
 ```
 The upload script assumes that the NRF51822 is connected over SWD using an stlink v2 with the following connection:
 
